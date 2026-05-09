@@ -1051,18 +1051,27 @@ void CHyprView::fullRender() {
         images[i].fb.getTexture(), windowBox,
         {.damage = &damage, .a = currentAlpha, .round = BORDER_RADIUS});
 
-    // Render workspace number indicator (if enabled and window names are disabled)
-    // When window names are enabled, the workspace ID is integrated into the window name
-    if (WORKSPACE_INDICATOR_ENABLED && !WINDOW_NAME_ENABLED) {
-      auto window = images[i].pWindow.lock();
-      if (window && images[i].originalWorkspace) {
-        renderWorkspaceIndicator(i, borderBox, damage, ISACTIVE);
+    // Labels (workspace ID + window name) are heavy: each tile rasterizes
+    // ~13 cairo text textures per frame because of the binary-search
+    // truncation in renderWindowName. With 10 tiles × 60fps that's ~7800
+    // text rasters/sec — kills both animation smoothness and hover.
+    // Only render labels when the overview is fully open (scale ≈ 1.0)
+    // and not closing. During open/close animation, skip labels entirely.
+    const bool LABELS_VISIBLE = !closing && currentScale >= 0.98f;
+    if (LABELS_VISIBLE) {
+      // Render workspace number indicator (if enabled and window names are disabled)
+      // When window names are enabled, the workspace ID is integrated into the window name
+      if (WORKSPACE_INDICATOR_ENABLED && !WINDOW_NAME_ENABLED) {
+        auto window = images[i].pWindow.lock();
+        if (window && images[i].originalWorkspace) {
+          renderWorkspaceIndicator(i, borderBox, damage, ISACTIVE);
+        }
       }
-    }
 
-    // Render window name (if enabled)
-    if (WINDOW_NAME_ENABLED) {
-      renderWindowName(images[i], borderBox);
+      // Render window name (if enabled)
+      if (WINDOW_NAME_ENABLED) {
+        renderWindowName(images[i], borderBox);
+      }
     }
   }
 }

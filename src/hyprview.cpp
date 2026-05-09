@@ -8,12 +8,16 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
-#include <hyprland/src/debug/Log.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/animation/AnimationManager.hpp>
 #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/devices/IPointer.hpp>
+#include <hyprland/src/devices/ITouch.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #undef private
 #include "HyprViewPassElement.hpp"
@@ -55,7 +59,7 @@ CHyprView::~CHyprView() {
       auto window = image.pWindow.lock();
       if (window && image.originalWorkspace &&
           window->m_workspace != image.originalWorkspace) {
-        Debug::log(LOG,
+        Log::logger->log(Log::INFO,
                    "[hyprview] ~CHyprView(): Restoring window '{}' from workspace {} to {}",
                    window->m_title, window->m_workspace->m_id,
                    image.originalWorkspace->m_id);
@@ -66,11 +70,11 @@ CHyprView::~CHyprView() {
 
   // Always cleanup resources in destructor if they haven't been cleaned yet
   if (!images.empty() || bgFramebuffer.m_size.x > 0) {
-    Debug::log(LOG, "[hyprview] ~CHyprView(): Cleaning up remaining resources");
+    Log::logger->log(Log::INFO, "[hyprview] ~CHyprView(): Cleaning up remaining resources");
     g_pHyprRenderer->makeEGLCurrent();
     images.clear();
     bgFramebuffer.release();
-    g_pInputManager->unsetCursorImage();
+    g_pInputManager->restoreCursorIconToApp();
     g_pHyprOpenGL->markBlurDirtyForMonitor(pMonitor.lock());
   }
 }
@@ -89,7 +93,7 @@ void CHyprView::setupWindowImages(std::vector<PHLWINDOW> &windowsToRender) {
   // Move windows to active workspace so they have valid surfaces for rendering
   for (auto &window : windowsToRender) {
     if (window->m_workspace != pMonitor->m_activeWorkspace) {
-      Debug::log(LOG, "[hyprview] Moving window '{}' from workspace {} to {}",
+      Log::logger->log(Log::INFO, "[hyprview] Moving window '{}' from workspace {} to {}",
                  window->m_title, window->m_workspace->m_id,
                  pMonitor->m_activeWorkspace->m_id);
       window->moveToWorkspace(pMonitor->m_activeWorkspace);
@@ -246,13 +250,13 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
   // This ensures the overview layer is created AFTER workspace migration
   blockOverviewRendering = true;
 
-  originalFocusedWindow = g_pCompositor->m_lastWindow;
+  originalFocusedWindow = Desktop::focusState()->window();
   userExplicitlySelected = false;
   currentHoveredIndex = -1;
   visualHoveredIndex = -1;
 
   auto origWindow = originalFocusedWindow.lock();
-  Debug::log(LOG, "[hyprview] CHyprView(): Saved original focused window: {}",
+  Log::logger->log(Log::INFO, "[hyprview] CHyprView(): Saved original focused window: {}",
              (void *)origWindow.get());
 
   static auto *const *PMARGIN =
@@ -348,7 +352,7 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
   if (!activeWorkspace)
     return;
 
-  Debug::log(LOG,
+  Log::logger->log(Log::INFO,
              "[hyprview] CHyprView(): Collecting windows for monitor '{}', "
              "workspace ID {}, mode={}",
              pMonitor->m_description, activeWorkspace->m_id,
@@ -436,8 +440,8 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
   }
 
   // Prepare screen info (available area after reserved regions)
-  Vector2D reservedTopLeft = pMonitor->m_reservedTopLeft;
-  Vector2D reservedBottomRight = pMonitor->m_reservedBottomRight;
+  Vector2D reservedTopLeft = Vector2D(pMonitor->m_reservedArea.left(), pMonitor->m_reservedArea.top());
+  Vector2D reservedBottomRight = Vector2D(pMonitor->m_reservedArea.right(), pMonitor->m_reservedArea.bottom());
   Vector2D fullMonitorSize = pMonitor->m_pixelSize;
 
   // Calculate extra bottom margin needed for window names if enabled
@@ -481,8 +485,8 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
                      placementResult.tiles[i].height};
   }
 
-  Debug::log(
-      LOG,
+  Log::logger->log(
+      Log::INFO,
       "[hyprview] Placement algorithm '{}' generated {}x{} grid with {} tiles",
       m_placement, placementResult.gridCols, placementResult.gridRows,
       placementResult.tiles.size());
@@ -492,12 +496,13 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
 
   g_pHyprRenderer->m_bBlockSurfaceFeedback = false;
 
-  g_pInputManager->setCursorImageUntilUnset("left_ptr");
+  // removed in 0.54: no direct cursor-icon-by-name setter
+  // g_pInputManager->setCursorImageUntilUnset("left_ptr");
 
   lastMousePosLocal =
       g_pInputManager->getMouseCoordsInternal() - pMonitor->m_position;
 
-  auto onCursorMove = [this](void *self, SCallbackInfo &info, std::any param) {
+  auto onCursorMove = [this](Event::SCallbackInfo &info) {
     if (closing)
       return;
 
@@ -527,8 +532,7 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
     info.cancelled = true;
   };
 
-  auto onCursorSelect = [this](void *self, SCallbackInfo &info,
-                               std::any param) {
+  auto onCursorSelect = [this](Event::SCallbackInfo &info) {
     if (closing)
       return;
 
@@ -558,7 +562,7 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
         auto window = images[tileIndex].pWindow.lock();
         if (window && window->m_isMapped) {
           // Focus the window first
-          g_pCompositor->focusWindow(window);
+          Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_OTHER);
 
           // Calculate mouse position relative to tile
           const CBox &tileBox = images[tileIndex].box;
@@ -599,7 +603,7 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
     }
   };
 
-  auto onMouseAxis = [this](void *self, SCallbackInfo &info, std::any param) {
+  auto onMouseAxis = [this](Event::SCallbackInfo &info) {
     if (closing)
       return;
 
@@ -628,7 +632,7 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
         auto window = images[tileIndex].pWindow.lock();
         if (window && window->m_isMapped) {
           // Make sure this window is focused so scroll events go to it
-          g_pCompositor->focusWindow(window);
+          Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_OTHER);
           // Don't cancel - let scroll event pass through to the focused window
           return;
         }
@@ -639,18 +643,23 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
     // scroll The focused window from hover will receive it
   };
 
-  mouseMoveHook = g_pHookSystem->hookDynamic("mouseMove", onCursorMove);
-  touchMoveHook = g_pHookSystem->hookDynamic("touchMove", onCursorMove);
+  mouseMoveHook = Event::bus()->m_events.input.mouse.move.listen(
+      [onCursorMove](const Vector2D &, Event::SCallbackInfo &info) { onCursorMove(info); });
+  touchMoveHook = Event::bus()->m_events.input.touch.motion.listen(
+      [onCursorMove](const ITouch::SMotionEvent &, Event::SCallbackInfo &info) { onCursorMove(info); });
 
-  mouseButtonHook = g_pHookSystem->hookDynamic("mouseButton", onCursorSelect);
-  mouseAxisHook = g_pHookSystem->hookDynamic("mouseAxis", onMouseAxis);
-  touchDownHook = g_pHookSystem->hookDynamic("touchDown", onCursorSelect);
+  mouseButtonHook = Event::bus()->m_events.input.mouse.button.listen(
+      [onCursorSelect](const IPointer::SButtonEvent &, Event::SCallbackInfo &info) { onCursorSelect(info); });
+  mouseAxisHook = Event::bus()->m_events.input.mouse.axis.listen(
+      [onMouseAxis](const IPointer::SAxisEvent &, Event::SCallbackInfo &info) { onMouseAxis(info); });
+  touchDownHook = Event::bus()->m_events.input.touch.down.listen(
+      [onCursorSelect](const ITouch::SDownEvent &, Event::SCallbackInfo &info) { onCursorSelect(info); });
 
   // NOW unblock rendering - workspace migration is complete
   // The overview layer will be created on the next render pass
   blockOverviewRendering = false;
-  Debug::log(
-      LOG, "[hyprview] CHyprView(): Constructor complete, unblocked rendering");
+  Log::logger->log(
+      Log::INFO, "[hyprview] CHyprView(): Constructor complete, unblocked rendering");
 }
 
 void CHyprView::selectHoveredWindow() {
@@ -662,7 +671,7 @@ void CHyprView::selectHoveredWindow() {
 
   // Safety validation - ensure we have a valid window to select
   if (closeOnID < 0 || closeOnID >= (int)images.size()) {
-    Debug::log(WARN,
+    Log::logger->log(Log::WARN,
                "[hyprview] selectHoveredWindow(): Invalid currentHoveredIndex "
                "{}, recalculating from mouse position",
                closeOnID);
@@ -680,7 +689,7 @@ void CHyprView::selectHoveredWindow() {
   if (closeOnID >= 0 && closeOnID < (int)images.size()) {
     auto selectedWindow = images[closeOnID].pWindow.lock();
     if (!selectedWindow || !selectedWindow->m_isMapped) {
-      Debug::log(WARN,
+      Log::logger->log(Log::WARN,
                  "[hyprview] selectHoveredWindow(): Selected window at index "
                  "{} is invalid",
                  closeOnID);
@@ -689,7 +698,7 @@ void CHyprView::selectHoveredWindow() {
 
   userExplicitlySelected = true;
 
-  Debug::log(LOG,
+  Log::logger->log(Log::INFO,
              "[hyprview] selectHoveredWindow(): User explicitly selected "
              "window at index {} (from currentHoveredIndex {})",
              closeOnID, currentHoveredIndex);
@@ -779,7 +788,7 @@ void CHyprView::onDamageReported() {
 void CHyprView::close() {
 
   if (closing) {
-    Debug::log(LOG, "[hyprview] close(): already closing, returning");
+    Log::logger->log(Log::INFO, "[hyprview] close(): already closing, returning");
     return;
   }
 
@@ -794,14 +803,14 @@ void CHyprView::close() {
 
   // STEP 1: Restore ALL windows to their original workspaces
   // The overview layer continues rendering during this process to hide the movement
-  Debug::log(
-      LOG, "[hyprview] close(): Restoring all windows to original workspaces");
+  Log::logger->log(
+      Log::INFO, "[hyprview] close(): Restoring all windows to original workspaces");
   for (const auto &image : images) {
     auto window = image.pWindow.lock();
     if (window && image.originalWorkspace &&
         window->m_workspace != image.originalWorkspace) {
-      Debug::log(
-          LOG,
+      Log::logger->log(
+          Log::INFO,
           "[hyprview] close(): Restoring window '{}' from workspace {} to {}",
           window->m_title, window->m_workspace->m_id,
           image.originalWorkspace->m_id);
@@ -810,12 +819,12 @@ void CHyprView::close() {
   }
 
   // STEP 2: Start closing animationi - animate scale back to 0
-  Debug::log(LOG, "[hyprview] close(): Start closing animation");
+  Log::logger->log(Log::INFO, "[hyprview] close(): Start closing animation");
   *scale = 0.0f;
 
   // STEP 3: Focus the selected window to trigger all lifecycle events
   if (userExplicitlySelected && selectedWindow) {
-    g_pCompositor->focusWindow(selectedWindow);
+    Desktop::focusState()->fullWindowFocus(selectedWindow, Desktop::FOCUS_REASON_OTHER);
     g_pKeybindManager->alterZOrder("top");
   }
 }
@@ -828,11 +837,11 @@ void CHyprView::onPreRender() {
 
   // If we're closing and animation has finished, do cleanup
   if (closing && scale->value() <= 0.01f && !readyForCleanup) {
-    Debug::log(LOG, "[hyprview] onPreRender(): Closing animation complete, cleaning up");
+    Log::logger->log(Log::INFO, "[hyprview] onPreRender(): Closing animation complete, cleaning up");
     readyForCleanup = true;
     images.clear();
     bgFramebuffer.release();
-    g_pInputManager->unsetCursorImage();
+    g_pInputManager->restoreCursorIconToApp();
     g_pHyprOpenGL->markBlurDirtyForMonitor(pMonitor.lock());
   }
 }
@@ -899,12 +908,12 @@ void CHyprView::fullRender() {
     return;
   }
 
-  const auto PLASTWINDOW = g_pCompositor->m_lastWindow.lock();
-  const auto PLASTWORKSPACE = g_pCompositor->m_lastWindow.lock();
+  const auto PLASTWINDOW = Desktop::focusState()->window();
+  const auto PLASTWORKSPACE = Desktop::focusState()->window();
 
   // Floating windows are rendered on top of tiled windows.
   // Z-order of windows from other workspaces does not matter.
-  std::unordered_map<CWindow *, size_t> zOrderMap;
+  std::unordered_map<Desktop::View::CWindow *, size_t> zOrderMap;
   zOrderMap.reserve(g_pCompositor->m_windows.size());
   size_t zOrder = 0;
   for (auto &window : g_pCompositor->m_windows) {
@@ -1078,7 +1087,7 @@ void CHyprView::renderWindowName(const SWindowImage &image,
   std::string windowText = window->m_initialClass + " • " + window->m_title;
 
   // Determine workspace text color based on whether window is active
-  const auto PLASTWINDOW = g_pCompositor->m_lastWindow.lock();
+  const auto PLASTWINDOW = Desktop::focusState()->window();
   const bool ISACTIVE = window == PLASTWINDOW;
   const auto &WORKSPACE_COLOR = ISACTIVE ? ACTIVE_BORDER_COLOR : INACTIVE_BORDER_COLOR;
 
@@ -1295,13 +1304,12 @@ void CHyprView::updateHoverState(int newIndex) {
   if (newIndex >= 0 && newIndex < (int)images.size()) {
     auto window = images[newIndex].pWindow.lock();
     if (window && window->m_isMapped) {
-      Debug::log(LOG,
+      Log::logger->log(Log::INFO,
                  "[hyprview] updateHoverState: Focusing window {} at index {}",
                  window->m_title, newIndex);
 
       // Focus the window and ensure it becomes the compositor's last focused window
-      g_pCompositor->focusWindow(window);
-      g_pCompositor->m_lastWindow = window;
+      Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_OTHER);
 
       lastHoveredWindow = window;
     }

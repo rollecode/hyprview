@@ -9,7 +9,7 @@ void CViewGesture::begin(const ITrackpadGesture::STrackpadGestureBegin &e) {
   m_lastDelta = 0.F;
   m_firstUpdate = true;
 
-  auto PMONITOR = g_pCompositor->m_lastMonitor.lock();
+  auto PMONITOR = g_pCompositor->getMonitorFromCursor();
   if (!PMONITOR)
     return;
 
@@ -37,7 +37,7 @@ void CViewGesture::update(const ITrackpadGesture::STrackpadGestureUpdate &e) {
   if (m_lastDelta <= 0.01) // plugin will crash if swipe ends at <= 0
     m_lastDelta = 0.01;
 
-  auto PMONITOR = g_pCompositor->m_lastMonitor.lock();
+  auto PMONITOR = g_pCompositor->getMonitorFromCursor();
   if (!PMONITOR)
     return;
 
@@ -47,7 +47,7 @@ void CViewGesture::update(const ITrackpadGesture::STrackpadGestureUpdate &e) {
 }
 
 void CViewGesture::end(const ITrackpadGesture::STrackpadGestureEnd &e) {
-  auto PMONITOR = g_pCompositor->m_lastMonitor.lock();
+  auto PMONITOR = g_pCompositor->getMonitorFromCursor();
   if (!PMONITOR)
     return;
 

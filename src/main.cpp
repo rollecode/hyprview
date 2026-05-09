@@ -7,11 +7,12 @@
 #include <fstream>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
-#include <hyprland/src/debug/Log.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
-#include <hyprland/src/desktop/Window.hpp>
+#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/input/trackpad/GestureTypes.hpp>
 #include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprutils/string/ConstVarList.hpp>
 #include <iostream>
@@ -212,7 +213,7 @@ getTargetMonitors(const std::string &targetMonitorName) {
 }
 
 static SDispatchResult onHyprviewDispatcher(std::string arg) {
-  Debug::log(LOG, "[hyprview] Dispatcher called with arg='{}'", arg);
+  Log::logger->log(Log::INFO, "[hyprview] Dispatcher called with arg='{}'", arg);
 
   // Check if any instance is swiping
   for (auto &[monitor, instance] : g_pHyprViewInstances) {
@@ -230,7 +231,7 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
   // Handle SELECT action
   if (parsedArgs.action == DispatcherArgs::Action::SELECT) {
-    auto PMONITOR = g_pCompositor->m_lastMonitor.lock();
+    auto PMONITOR = g_pCompositor->getMonitorFromCursor();
     if (PMONITOR) {
       auto it = g_pHyprViewInstances.find(PMONITOR);
       if (it != g_pHyprViewInstances.end() && it->second) {
@@ -243,7 +244,7 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
   // Handle DEBUG action
   if (parsedArgs.action == DispatcherArgs::Action::DEBUG) {
-    auto PMONITOR = g_pCompositor->m_lastMonitor.lock();
+    auto PMONITOR = g_pCompositor->getMonitorFromCursor();
     if (!PMONITOR) {
       return {.success = false, .error = "No active monitor"};
     }
@@ -263,8 +264,8 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
     out << "Placement algorithm: " << parsedArgs.placement << "\n";
 
     // Get monitor dimensions
-    Vector2D reservedTopLeft = PMONITOR->m_reservedTopLeft;
-    Vector2D reservedBottomRight = PMONITOR->m_reservedBottomRight;
+    Vector2D reservedTopLeft = Vector2D(PMONITOR->m_reservedArea.left(), PMONITOR->m_reservedArea.top());
+    Vector2D reservedBottomRight = Vector2D(PMONITOR->m_reservedArea.right(), PMONITOR->m_reservedArea.bottom());
     Vector2D fullMonitorSize = PMONITOR->m_pixelSize;
     Vector2D availableSize = {
         fullMonitorSize.x - reservedTopLeft.x - reservedBottomRight.x,
@@ -423,7 +424,7 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
   // Handle ON action
   if (parsedArgs.action == DispatcherArgs::Action::ON) {
-    Debug::log(LOG, "[hyprview] 'on' command called with mode={}",
+    Log::logger->log(Log::INFO, "[hyprview] 'on' command called with mode={}",
                (int)parsedArgs.collectionMode);
 
     auto targetMonitors = getTargetMonitors(parsedArgs.targetMonitor);
@@ -433,7 +434,7 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
     }
 
     // Open overview on target monitors only
-    Debug::log(LOG, "[hyprview] Opening overview with mode={}",
+    Log::logger->log(Log::INFO, "[hyprview] Opening overview with mode={}",
                (int)parsedArgs.collectionMode);
     renderingOverview = true;
     for (auto &targetMonitor : targetMonitors) {
@@ -441,13 +442,13 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
         // Check if already active on this monitor
         auto it = g_pHyprViewInstances.find(targetMonitor);
         if (it != g_pHyprViewInstances.end() && it->second) {
-          Debug::log(
-              LOG, "[hyprview] Overview already active on monitor {}, skipping",
+          Log::logger->log(
+              Log::INFO, "[hyprview] Overview already active on monitor {}, skipping",
               targetMonitor->m_description);
           continue;
         }
 
-        Debug::log(LOG,
+        Log::logger->log(Log::INFO,
                    "[hyprview] Creating overview for monitor {} with mode={} "
                    "and placement={}",
                    targetMonitor->m_description, (int)parsedArgs.collectionMode,
@@ -463,7 +464,7 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
   // Handle TOGGLE action
   if (parsedArgs.action == DispatcherArgs::Action::TOGGLE) {
-    Debug::log(LOG, "[hyprview] Toggle called with mode={}",
+    Log::logger->log(Log::INFO, "[hyprview] Toggle called with mode={}",
                (int)parsedArgs.collectionMode);
 
     auto targetMonitors = getTargetMonitors(parsedArgs.targetMonitor);
@@ -494,8 +495,8 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
     if (hasOverviewOnTarget) {
       // Close all instances, similar to onCursorSelect in hyprview.cpp
-      Debug::log(
-          LOG,
+      Log::logger->log(
+          Log::INFO,
           "[hyprview] Toggle: closing overviews on all monitors (non-explicit)");
 
       for (auto &[monitor, instance] : g_pHyprViewInstances) {
@@ -524,7 +525,7 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
     } else {
       // Open overview on target monitors
-      Debug::log(LOG,
+      Log::logger->log(Log::INFO,
                  "[hyprview] Toggle: opening overviews on target monitors with "
                  "mode={}",
                  (int)parsedArgs.collectionMode);
@@ -535,13 +536,13 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
           // Do not open if an instance already exists to avoid overwriting
           // explicitly-on overviews
           if (g_pHyprViewInstances.count(targetMonitor)) {
-            Debug::log(LOG,
+            Log::logger->log(Log::INFO,
                        "[hyprview] Toggle: skipping monitor {} as it already "
                        "has an active overview",
                        targetMonitor->m_description);
             continue;
           }
-          Debug::log(LOG,
+          Log::logger->log(Log::INFO,
                      "[hyprview] Creating overview for monitor {} with mode={} "
                      "and placement={}",
                      targetMonitor->m_description,
@@ -632,10 +633,10 @@ static Hyprlang::CParseResult hyprviewGestureKeyword(const char *LHS,
   if (data[startDataIdx] == "toggle")
     resultFromGesture =
         g_pTrackpadGestures->addGesture(makeUnique<CViewGesture>(), fingerCount,
-                                        direction, modMask, deltaScale);
+                                        direction, modMask, deltaScale, false);
   else if (data[startDataIdx] == "unset")
     resultFromGesture = g_pTrackpadGestures->removeGesture(
-        fingerCount, direction, modMask, deltaScale);
+        fingerCount, direction, modMask, deltaScale, false);
   else {
     result.setError(
         std::format("Invalid gesture: {}", data[startDataIdx]).c_str());
@@ -702,9 +703,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     throw std::runtime_error("[hyprview] Failed initializing hooks");
   }
 
-  static auto P = HyprlandAPI::registerCallbackDynamic(
-      PHANDLE, "preRender",
-      [](void *self, SCallbackInfo &info, std::any param) {
+  static auto P = Event::bus()->m_events.render.pre.listen([](PHLMONITOR) {
         for (auto &[monitor, instance] : g_pHyprViewInstances) {
           if (instance)
             instance->onPreRender();
@@ -726,9 +725,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
       });
 
   // Block workspace gestures when overview is active
-  static auto gestureBeginHook = HyprlandAPI::registerCallbackDynamic(
-      PHANDLE, "swipeBegin",
-      [](void *self, SCallbackInfo &info, std::any param) {
+  static auto gestureBeginHook = Event::bus()->m_events.gesture.swipe.begin.listen(
+      [](const IPointer::SSwipeBeginEvent &, Event::SCallbackInfo &info) {
         // If any overview is active and it's not the hyprview gesture itself,
         // cancel the gesture
         if (!g_pHyprViewInstances.empty()) {
@@ -743,16 +741,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
           // If overview is active but this isn't a hyprview gesture, block it
           if (!isHyprviewGesture) {
-            Debug::log(LOG, "[hyprview] Blocking workspace gesture while "
+            Log::logger->log(Log::INFO, "[hyprview] Blocking workspace gesture while "
                             "overview is active");
             info.cancelled = true;
           }
         }
       });
 
-  static auto gestureUpdateHook = HyprlandAPI::registerCallbackDynamic(
-      PHANDLE, "swipeUpdate",
-      [](void *self, SCallbackInfo &info, std::any param) {
+  static auto gestureUpdateHook = Event::bus()->m_events.gesture.swipe.update.listen(
+      [](const IPointer::SSwipeUpdateEvent &, Event::SCallbackInfo &info) {
         // Block gesture updates when overview is active (unless it's the
         // hyprview gesture)
         if (!g_pHyprViewInstances.empty()) {
@@ -770,8 +767,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         }
       });
 
-  static auto gestureEndHook = HyprlandAPI::registerCallbackDynamic(
-      PHANDLE, "swipeEnd", [](void *self, SCallbackInfo &info, std::any param) {
+  static auto gestureEndHook = Event::bus()->m_events.gesture.swipe.end.listen(
+      [](const IPointer::SSwipeEndEvent &, Event::SCallbackInfo &info) {
         // Block gesture end when overview is active (unless it's the hyprview
         // gesture)
         if (!g_pHyprViewInstances.empty()) {
@@ -792,7 +789,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
   HyprlandAPI::addDispatcherV2(PHANDLE, "hyprview:toggle",
                                ::onHyprviewDispatcher);
 
-  Debug::log(LOG, "[hyprview] Plugin initialized, dispatchers "
+  Log::logger->log(Log::INFO, "[hyprview] Plugin initialized, dispatchers "
                   "'hyprview:toggle' registered");
 
   HyprlandAPI::addConfigKeyword(PHANDLE, "hyprview-gesture",

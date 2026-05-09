@@ -4,7 +4,8 @@
 #include "globals.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/AnimatedVariable.hpp>
-#include <hyprland/src/managers/HookSystemManager.hpp>
+#include <hyprland/src/plugins/HookSystem.hpp>
+#include <hyprland/src/helpers/signal/Signal.hpp>
 #include <hyprland/src/render/Framebuffer.hpp>
 #include <unordered_map>
 #include <vector>
@@ -139,11 +140,11 @@ private:
   PHLANIMVAR<Vector2D> pos;
   PHLANIMVAR<float> scale; // Scale animation for overview
 
-  SP<HOOK_CALLBACK_FN> mouseMoveHook;
-  SP<HOOK_CALLBACK_FN> mouseButtonHook;
-  SP<HOOK_CALLBACK_FN> mouseAxisHook;
-  SP<HOOK_CALLBACK_FN> touchMoveHook;
-  SP<HOOK_CALLBACK_FN> touchDownHook;
+  CHyprSignalListener mouseMoveHook;
+  CHyprSignalListener mouseButtonHook;
+  CHyprSignalListener mouseAxisHook;
+  CHyprSignalListener touchMoveHook;
+  CHyprSignalListener touchDownHook;
 
   bool swipeWasCommenced = false;
 

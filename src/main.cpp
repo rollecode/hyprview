@@ -475,22 +475,29 @@ static SDispatchResult onHyprviewDispatcher(std::string arg) {
 
     // Check if any of the target monitors has an overview active (that can be
     // toggled) Monitors with stickyOn=true can ONLY be toggled if
-    // specifically targeted
+    // specifically targeted.
+    // Also: if every existing instance on target monitors is mid-close, ignore
+    // this toggle entirely. Prevents Super+A spam from queueing GPU-heavy
+    // open work on top of an in-progress close (the "rapid press = lag" case).
     bool hasOverviewOnTarget = false;
+    bool allClosing = true;
+    bool anyExists = false;
     for (auto &targetMonitor : targetMonitors) {
       auto it = g_pHyprViewInstances.find(targetMonitor);
       if (it != g_pHyprViewInstances.end() && it->second) {
-        // Count as toggleable if:
-        // - Monitor was explicitly specified (can toggle even if stickyOn)
-        // - OR instance is not explicitly on (general toggle affects it)
+        anyExists = true;
+        if (!it->second->closing) allClosing = false;
         bool isExplicitlyTargeted = !parsedArgs.targetMonitor.empty();
         bool canToggle = isExplicitlyTargeted || !it->second->stickyOn;
-
-        if (canToggle) {
-          hasOverviewOnTarget = true;
-          break;
-        }
+        if (canToggle) hasOverviewOnTarget = true;
+      } else {
+        allClosing = false;
       }
+    }
+    if (anyExists && allClosing) {
+      Log::logger->log(Log::INFO,
+                       "[hyprview] Toggle ignored: instance is mid-close, wait for it to finish");
+      return {};
     }
 
     if (hasOverviewOnTarget) {

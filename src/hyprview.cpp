@@ -1026,10 +1026,16 @@ void CHyprView::fullRender() {
     data.round = BORDER_RADIUS;
     g_pHyprOpenGL->renderRect(borderBox, fadedBorderColor, data);
 
+    // Hover dim: macOS-style. Hovered tile renders at full brightness,
+    // others at reduced alpha. Works even when borders are disabled,
+    // so users get clear feedback on which tile is selected.
+    const bool ISHOVERED = ((int)i == visualHoveredIndex);
+    const float tileAlpha = ISHOVERED ? currentAlpha : currentAlpha * 0.65f;
+
     CRegion damage{0, 0, INT16_MAX, INT16_MAX};
     g_pHyprOpenGL->renderTextureInternal(
         images[i].fb.getTexture(), windowBox,
-        {.damage = &damage, .a = currentAlpha, .round = BORDER_RADIUS});
+        {.damage = &damage, .a = tileAlpha, .round = BORDER_RADIUS});
 
     // Render workspace number indicator (if enabled and window names are disabled)
     // When window names are enabled, the workspace ID is integrated into the window name

@@ -898,9 +898,13 @@ void CHyprView::fullRender() {
         bgFramebuffer.getTexture(), monitorBox,
         {.damage = &damage, .a = 1.0, .round = 0});
 
-    // Add a dim overlay that fades in with the overview
+    // Add a dim overlay that fades in with the overview.
+    // SRectRenderData.damage is a non-null required pointer in 0.54 —
+    // passing {} crashes the compositor with malloc heap-corruption.
+    CHyprOpenGLImpl::SRectRenderData dimData;
+    dimData.damage = &damage;
     g_pHyprOpenGL->renderRect(
-        monitorBox, CHyprColor(0.0, 0.0, 0.0, BG_DIM * currentAlpha), {});
+        monitorBox, CHyprColor(0.0, 0.0, 0.0, BG_DIM * currentAlpha), dimData);
   }
 
   // If no windows, show centered message
@@ -925,8 +929,10 @@ void CHyprView::fullRender() {
       // Render subtle background box
       CBox bgBox = {centerX - 30, centerY - 20, textWidth + 60,
                     textHeight + 40};
+      CRegion bgBoxDamage{0, 0, INT16_MAX, INT16_MAX};
       CHyprOpenGLImpl::SRectRenderData bgData;
       bgData.round = 12;
+      bgData.damage = &bgBoxDamage;
       g_pHyprOpenGL->renderRect(
           bgBox, CHyprColor(0.0, 0.0, 0.0, 0.5 * currentAlpha), bgData);
 
@@ -1028,9 +1034,17 @@ void CHyprView::fullRender() {
     CHyprColor fadedBorderColor = BORDERCOLOR;
     fadedBorderColor.a *= currentAlpha;
 
-    CHyprOpenGLImpl::SRectRenderData data;
-    data.round = BORDER_RADIUS;
-    g_pHyprOpenGL->renderRect(borderBox, fadedBorderColor, data);
+    // Skip border renderRect entirely when border is invisible
+    // (user config has border_width=0). Saves N renderRect calls per
+    // frame for N tiles AND avoids a Hyprland 0.54 crash path that
+    // appears tied to renderRect under heavy tile counts.
+    if (BORDER_WIDTH > 0) {
+      CRegion borderDamage{0, 0, INT16_MAX, INT16_MAX};
+      CHyprOpenGLImpl::SRectRenderData data;
+      data.round = BORDER_RADIUS;
+      data.damage = &borderDamage;
+      g_pHyprOpenGL->renderRect(borderBox, fadedBorderColor, data);
+    }
 
     // Hover grow: scale the hovered tile up slightly (centered on tile).
     // Gives clear visual feedback even with borders disabled, mimicking
@@ -1121,6 +1135,7 @@ void CHyprView::renderWorkspaceIndicator(size_t i, const CBox &borderBox,
     CBox textBgBox = {textX - 8, textY - 8, textWidth + 16, textHeight + 16};
     CHyprOpenGLImpl::SRectRenderData bgData;
     bgData.round = 8;
+    bgData.damage = &damage;
     g_pHyprOpenGL->renderRect(
         textBgBox, CHyprColor(0.0, 0.0, 0.0, WORKSPACE_INDICATOR_BG_OPACITY),
         bgData);
@@ -1257,8 +1272,10 @@ void CHyprView::renderWindowName(const SWindowImage &image,
     // Render background for entire text
     CBox textBgBox = {startX - bgPadding, textY - bgPadding,
                       totalWidth + 2 * bgPadding, textHeight + 2 * bgPadding};
+    CRegion textBgDamage{0, 0, INT16_MAX, INT16_MAX};
     CHyprOpenGLImpl::SRectRenderData bgData;
     bgData.round = 4;
+    bgData.damage = &textBgDamage;
     g_pHyprOpenGL->renderRect(
         textBgBox, CHyprColor(0.0, 0.0, 0.0, WINDOW_NAME_BG_OPACITY), bgData);
 

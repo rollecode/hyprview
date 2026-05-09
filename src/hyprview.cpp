@@ -126,6 +126,11 @@ void CHyprView::setupWindowImages(std::vector<PHLWINDOW> &windowsToRender) {
     g_pHyprRenderer->beginRender(pMonitor.lock(), fakeDamage,
                                  RENDER_MODE_FULL_FAKE, nullptr, &image.fb);
 
+    // Clear FB to opaque black so transparent regions of the captured window
+    // show solid black instead of stale GPU memory ("noise" on opacity windows).
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
     if (window && window->m_isMapped) {
       g_pHyprRenderer->renderWindow(window, pMonitor.lock(), Time::steadyNow(),
                                     false, RENDER_PASS_MAIN, false, false);
@@ -756,6 +761,10 @@ void CHyprView::redrawID(int id, bool forcelowres) {
   g_pHyprRenderer->beginRender(pMonitor.lock(), fakeDamage,
                                RENDER_MODE_FULL_FAKE, nullptr, &image.fb);
 
+  // Clear FB to opaque black so transparent windows don't show GPU-memory noise
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
   if (window->m_isMapped) {
     g_pHyprRenderer->renderWindow(window, pMonitor.lock(), Time::steadyNow(),
                                   false, RENDER_PASS_MAIN, false, false);
@@ -844,10 +853,11 @@ void CHyprView::close() {
 }
 
 void CHyprView::onPreRender() {
-  if (damageDirty && !closing) {
-    damageDirty = false;
-    redrawAll(false);
-  }
+  // Note: do NOT re-capture window framebuffers every frame.
+  // Animation interpolation only needs the cached framebuffers from
+  // setupWindowImages — re-rendering N windows × 60fps × ultrawide
+  // is what made the overview laggy. Just consume the dirty flag.
+  damageDirty = false;
 
   // If we're closing and animation has finished, do cleanup
   if (closing && scale->value() <= 0.01f && !readyForCleanup) {
@@ -857,6 +867,9 @@ void CHyprView::onPreRender() {
     bgFramebuffer.release();
     g_pInputManager->restoreCursorIconToApp();
     g_pHyprOpenGL->markBlurDirtyForMonitor(pMonitor.lock());
+    // Force a full monitor damage so stale overview pixels are cleared
+    // (fixes the visual artifacts on toggle-back).
+    g_pHyprRenderer->damageMonitor(pMonitor.lock());
   }
 }
 

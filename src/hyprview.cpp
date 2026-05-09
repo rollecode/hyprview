@@ -853,11 +853,10 @@ void CHyprView::close() {
 }
 
 void CHyprView::onPreRender() {
-  // Note: do NOT re-capture window framebuffers every frame.
-  // Animation interpolation only needs the cached framebuffers from
-  // setupWindowImages — re-rendering N windows × 60fps × ultrawide
-  // is what made the overview laggy. Just consume the dirty flag.
-  damageDirty = false;
+  if (damageDirty && !closing) {
+    damageDirty = false;
+    redrawAll(false);
+  }
 
   // If we're closing and animation has finished, do cleanup
   if (closing && scale->value() <= 0.01f && !readyForCleanup) {

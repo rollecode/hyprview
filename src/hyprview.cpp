@@ -858,16 +858,17 @@ void CHyprView::onPreRender() {
     redrawAll(false);
   }
 
-  // If we're closing and animation has finished, do cleanup
+  // If we're closing and animation has finished, mark for cleanup.
+  // Heavy GPU teardown (images.clear() destroys ~10 framebuffers,
+  // bgFramebuffer.release() drops the full-monitor capture) caused
+  // a single-frame stall right at the end of the close animation
+  // — the "lag into place" jank. Defer all that to the destructor,
+  // which runs when the next toggle erases the instance.
   if (closing && scale->value() <= 0.01f && !readyForCleanup) {
-    Log::logger->log(Log::INFO, "[hyprview] onPreRender(): Closing animation complete, cleaning up");
+    Log::logger->log(Log::INFO, "[hyprview] onPreRender(): Closing animation complete");
     readyForCleanup = true;
-    images.clear();
-    bgFramebuffer.release();
     g_pInputManager->restoreCursorIconToApp();
     g_pHyprOpenGL->markBlurDirtyForMonitor(pMonitor.lock());
-    // Force a full monitor damage so stale overview pixels are cleared
-    // (fixes the visual artifacts on toggle-back).
     g_pHyprRenderer->damageMonitor(pMonitor.lock());
   }
 }
@@ -1026,16 +1027,24 @@ void CHyprView::fullRender() {
     data.round = BORDER_RADIUS;
     g_pHyprOpenGL->renderRect(borderBox, fadedBorderColor, data);
 
-    // Hover dim: macOS-style. Hovered tile renders at full brightness,
-    // others at reduced alpha. Works even when borders are disabled,
-    // so users get clear feedback on which tile is selected.
+    // Hover grow: scale the hovered tile up slightly (centered on tile).
+    // Gives clear visual feedback even with borders disabled, mimicking
+    // macOS Mission Control / Wayfire scale's "raise on hover" affordance.
     const bool ISHOVERED = ((int)i == visualHoveredIndex);
-    const float tileAlpha = ISHOVERED ? currentAlpha : currentAlpha * 0.65f;
+    if (ISHOVERED) {
+      constexpr double HOVER_SCALE = 1.05;
+      const double dw = windowBox.width  * (HOVER_SCALE - 1.0);
+      const double dh = windowBox.height * (HOVER_SCALE - 1.0);
+      windowBox.x -= dw / 2.0;
+      windowBox.y -= dh / 2.0;
+      windowBox.width  *= HOVER_SCALE;
+      windowBox.height *= HOVER_SCALE;
+    }
 
     CRegion damage{0, 0, INT16_MAX, INT16_MAX};
     g_pHyprOpenGL->renderTextureInternal(
         images[i].fb.getTexture(), windowBox,
-        {.damage = &damage, .a = tileAlpha, .round = BORDER_RADIUS});
+        {.damage = &damage, .a = currentAlpha, .round = BORDER_RADIUS});
 
     // Render workspace number indicator (if enabled and window names are disabled)
     // When window names are enabled, the workspace ID is integrated into the window name

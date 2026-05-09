@@ -853,9 +853,14 @@ void CHyprView::close() {
 }
 
 void CHyprView::onPreRender() {
+  // Re-capture window framebuffers only when truly dirty AND not closing.
+  // During close animation, cached textures are sufficient — re-rendering
+  // every window every frame is what made the close lag visible.
   if (damageDirty && !closing) {
     damageDirty = false;
     redrawAll(false);
+  } else if (closing) {
+    damageDirty = false; // consume; never re-capture during close
   }
 
   // If we're closing and animation has finished, mark for cleanup.
@@ -1331,27 +1336,24 @@ bool CHyprView::isMouseOverValidTile(const Vector2D &mousePos) {
 }
 
 void CHyprView::updateHoverState(int newIndex) {
-  // Update visual hover state immediately for responsiveness
-  if (newIndex != visualHoveredIndex) {
-    visualHoveredIndex = newIndex;
-    // Trigger immediate visual update without waiting for focus change
-    damage();
-  }
+  // Early-exit if hover hasn't actually moved to a different tile.
+  // Mouse can move many pixels within the same tile and we'd otherwise
+  // call fullWindowFocus + damage on every event (~100/sec on ultrawide),
+  // making hover laggy.
+  if (newIndex == currentHoveredIndex)
+    return;
 
+  // Update visual hover state and trigger one redraw for the size change.
+  visualHoveredIndex = newIndex;
   currentHoveredIndex = newIndex;
+  damage();
 
-  // Always focus window on hover in overview mode - this is expected behavior
-  // for a task switcher/window picker, regardless of global follow_mouse setting
+  // Focus the newly-hovered window once. fullWindowFocus is heavy
+  // (fires signals, repaints decorations); only do it on actual change.
   if (newIndex >= 0 && newIndex < (int)images.size()) {
     auto window = images[newIndex].pWindow.lock();
     if (window && window->m_isMapped) {
-      Log::logger->log(Log::INFO,
-                 "[hyprview] updateHoverState: Focusing window {} at index {}",
-                 window->m_title, newIndex);
-
-      // Focus the window and ensure it becomes the compositor's last focused window
       Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_OTHER);
-
       lastHoveredWindow = window;
     }
   }

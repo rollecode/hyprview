@@ -452,10 +452,24 @@ CHyprView::CHyprView(PHLMONITOR pMonitor_, PHLWORKSPACE startedOn_, bool swipe_,
     bottomMarginAdjustment = WINDOW_NAME_FONT_SIZE * 1.5 + 8.0;
   }
 
+  // Optional max-width clamp (centers the layout on ultrawide screens)
+  static auto *const *PMAXWIDTH =
+      (Hyprlang::INT *const *)HyprlandAPI::getConfigValue(
+          PHANDLE, "plugin:hyprview:max_width")
+          ->getDataStaticPtr();
+  const int MAX_WIDTH = **PMAXWIDTH;
+
+  double availableWidth = fullMonitorSize.x - reservedTopLeft.x - reservedBottomRight.x;
+  double offsetX = reservedTopLeft.x;
+  if (MAX_WIDTH > 0 && (double)MAX_WIDTH < availableWidth) {
+    offsetX = reservedTopLeft.x + (availableWidth - (double)MAX_WIDTH) / 2.0;
+    availableWidth = (double)MAX_WIDTH;
+  }
+
   ScreenInfo screenInfo = {
-      fullMonitorSize.x - reservedTopLeft.x - reservedBottomRight.x,                          // width
+      availableWidth,                                                                         // width
       fullMonitorSize.y - reservedTopLeft.y - reservedBottomRight.y - bottomMarginAdjustment, // height (adjusted for window names)
-      reservedTopLeft.x,                                                                      // offsetX
+      offsetX,                                                                                // offsetX
       reservedTopLeft.y,                                                                      // offsetY
       (double)MARGIN                                                                          // margin
   };

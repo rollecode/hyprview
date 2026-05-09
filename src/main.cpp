@@ -797,6 +797,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
   HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprview:margin",
                               Hyprlang::INT{10});
+  HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprview:max_width",
+                              Hyprlang::INT{0});  // 0 = use full monitor width
   HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprview:gesture_distance",
                               Hyprlang::INT{200});
   HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprview:active_border_color",
